@@ -1,0 +1,2055 @@
+library(GISTools)
+library(sf)
+require(rgdal)
+require(raster)
+library(sp)
+library(ggplot2)
+library(data.table)
+library(lubridate)
+library(dplyr)
+library(jsonlite)
+library(leaflet)
+library(data.table)
+library(readxl)
+library(magrittr)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(spatialEco)
+library(ggplot2)
+library(ggmap)
+library(sp)
+library(maptools)
+library(maps)
+library(ggmap)
+library(mapproj)
+library(sf)
+library(stringr)
+library(dplyr)
+library(showtext)
+showtext.auto(enable = TRUE)
+font.add('A', regular = '/Library/Fonts/BiauKai.ttf')
+font.add('B', regular = '/Library/Fonts/Microsoft/Times New Roman.ttf')
+
+
+setwd("D:/碩班/計畫")
+getwd()
+
+house=fread("D:/碩班/計畫/門牌資料/house_num.txt",encoding="UTF-8")
+house=house[house$COUNTYCODE %in% c(10018,10004),]
+#write.csv(house,"reasonablehouse.csv")
+
+village=read_sf("D:/碩班/計畫/village/village.shp")
+village=st_transform(village, crs=3826)
+village=filter(village, COUNTYNAME %in% c("桃園市","新竹縣","新竹市","苗栗縣"))
+
+
+bus_stop=data.frame()
+#桃園市
+temp=fread("D:/碩班/計畫/可及性分析/公車站牌/Taoyuan_Stop.csv",encoding="UTF-8",skip=1)
+temp=filter(temp, InfoDate=="2021-03-01")%>%
+  rename(SubRouteUID=SubrouteUID, StopName=StopNameZh)
+bus_stop=rbind(bus_stop, temp)
+#新竹市
+temp=fread("D:/碩班/計畫/可及性分析/公車站牌/Hsinchu_Stop.csv",encoding="UTF-8",skip=1)
+temp=filter(temp, InfoDate=="2021-03-01")%>%
+  rename(SubRouteUID=SubrouteUID, StopName=StopNameZh)
+bus_stop=rbind(bus_stop, temp)
+#新竹縣
+temp=fread("D:/碩班/計畫/可及性分析/公車站牌/HsinchuCounty_Stop.csv",encoding="UTF-8",skip=1)
+temp=filter(temp, InfoDate=="2021-03-01")%>%
+  rename(SubRouteUID=SubrouteUID, StopName=StopNameZh)
+bus_stop=rbind(bus_stop, temp)
+#苗栗縣
+temp=fread("D:/碩班/計畫/可及性分析/公車站牌/苗栗縣市區公車路線站牌資料.csv",encoding="UTF-8",skip=1)
+temp=filter(temp, InfoDate=="2021-03-01")%>%
+  rename(SubRouteUID=SubrouteUID, StopName=StopNameZh)
+bus_stop=rbind(bus_stop, temp)
+bus_stop$StopID=as.character(bus_stop$StopID)
+#公路客運
+temp=fread("D:/碩班/計畫/可及性分析/公車站牌/THB_Stop.csv", encoding="UTF-8")
+temp=filter(temp, InfoDate=="2021-03-01")%>%
+  rename(SubRouteUID=SubrouteUID, StopName=StopNameZh)
+bus_stop=rbind(bus_stop, temp)
+bus_stop$StopID=as.character(bus_stop$StopID)
+
+#ptx沒有的
+temp1=read.csv("D:/碩班/計畫/可及性分析/公車站牌/ptx_no_stop.csv", header=T)
+#bind_rows()沒有的欄位會變NA
+bus_stop=bind_rows(bus_stop, temp1[,intersect(colnames(bus_stop), colnames(temp1))])
+#rm() remove from enviroment
+rm(temp1)
+bus_stop=bus_stop%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", PositionLon, " ", PositionLat, ")")))%>%
+  st_sf(crs=4326)%>%
+  st_transform(crs=3826)
+rm(temp)
+
+bus_stop=cbind(bus_stop, st_coordinates(bus_stop))%>%
+  rename(X_stop=X, Y_stop=Y)
+
+bus_stop=stops4
+bus_stop=bus_stop[,c(1,4,5)]
+bus_stop=bus_stop%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", x, " ", y, ")")))%>%st_sf(crs=3826)
+#buffer
+s=Sys.time()
+bus_stop_buf=st_buffer(bus_stop, 500)%>%
+  st_union()
+e=Sys.time()
+print(e-s)
+house=reahome
+house=house%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", X, " ", Y, ")")))%>%
+  st_sf(crs=3826)
+
+temp=st_intersects(house, bus_stop_buf)
+house_num_ana=house[data.frame(temp)$row.id, ]
+result=as.data.frame(unique(cbind(as.character(house$VILLCODE),as.character(house$VILLNAME))))
+#rm(villages)
+names(result)=c("VILLCODE","VILLNAME")
+for(i in c(1:nrow(result))){
+  village=as.numeric(result[i,1])
+  temp=filter(house,VILLCODE==village)
+  result[i,3]=nrow(temp)
+  temp1=filter(house_num_ana,VILLCODE==village)
+  result[i,4]=nrow(temp1)
+}
+names(result)=c("VILLCODE","VILLNAME","REASONABLEHOUSE","SPACECOVERHOUSE")
+result$SPACECOVERRATE=result$SPACECOVERHOUSE/result$REASONABLEHOUSE
+rm(temp,temp1)
+spatiocover=merge(result,vil_detail,'VILLCODE',all.x=T)
+
+
+
+
+
+
+bus_stop=bus_stop%>%st_sf(crs=3826)
+
+###########################################################
+village$TOWNCODE=as.character(village$TOWNCODE)
+house$TOWNCODE=as.character(house$TOWNCODE)
+house$VILLCODE=as.character(house$VILLCODE)
+house=left_join(house, st_drop_geometry(village)[, c("VILLCODE","VILLNAME","TOWNCODE")])
+house=st_intersection(house, village$geometry)
+############################################################
+coverrate_all=c()
+temp=st_intersects(house, bus_stop_buf)
+sum(!(c(1:nrow(house)) %in% data.frame(temp)$row.id))
+house_num_ana=house[data.frame(temp)$row.id, ]
+
+
+result=as.data.frame(unique(cbind(as.character(house$VILLCODE),as.character(house$VILLNAME))))
+#rm(villages)
+names(result)=c("VILLCODE","VILLNAME")
+for(i in c(1:nrow(result))){
+  village=as.numeric(result[i,1])
+  temp=filter(house,VILLCODE==village)
+  result[i,3]=nrow(temp)
+  temp1=filter(house_num_ana,VILLCODE==village)
+  result[i,4]=nrow(temp1)
+}
+names(result)=c("VILLCODE","VILLNAME","REASONABLEHOUSE","SPACECOVERHOUSE")
+result$SPACECOVERRATE=result$SPACECOVERHOUSE/result$REASONABLEHOUSE
+rm(temp,temp1)
+write.table(result,"result0922-2.csv",sep=",",row.names=F)
+
+
+write.table(house_num_ana,"coverrate_all_space.csv",sep=",",row.names=F)
+
+
+#crs change
+poilist3=poilist3[,c(1:5,8:10)]%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", x2, " ", y2, ")")))%>%
+  st_sf(crs=4326)%>%
+  st_transform(crs=3826)
+rm(temp)
+
+poilist3=cbind(poilist3, st_coordinates(poilist3))%>%
+  rename(X1=X, Y1=Y)
+
+poilist3=st_drop_geometry(poilist3)
+
+bus_stop1=stops5
+bus_stop1=bus_stop1[,c(1,4,5)]
+house=reahome
+house=house%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", X, " ", Y, ")")))%>%
+  st_sf(crs=3826)
+
+resultlist=list()
+for(j in c(5:23)){
+  bus_stop=bus_stop1[bus_stop1$StopUID%in%stop_time[stop_time$time==j,]$StopUID,]
+  bus_stop=bus_stop%>%
+    mutate(Geometry=st_as_sfc(paste0("POINT(", x, " ", y, ")")))%>%st_sf(crs=3826)
+  #buffer
+  s=Sys.time()
+  bus_stop_buf=st_buffer(bus_stop, 500)%>%
+    st_union()
+  e=Sys.time()
+  print(e-s)
+  temp=st_intersects(house, bus_stop_buf)
+  house_num_ana=house[data.frame(temp)$row.id, ]
+  result=as.data.frame(unique(cbind(as.character(house$VILLCODE),as.character(house$VILLNAME))))
+  names(result)=c("VILLCODE","VILLNAME")
+  for(i in c(1:nrow(result))){
+    village=as.numeric(result[i,1])
+    temp=filter(house,VILLCODE==village)
+    result[i,3]=nrow(temp)
+    temp1=filter(house_num_ana,VILLCODE==village)
+    result[i,4]=nrow(temp1)
+  }
+  names(result)=c("VILLCODE","VILLNAME","REASONABLEHOUSE","SPACECOVERHOUSE")
+  result$SPACECOVERRATE=result$SPACECOVERHOUSE/result$REASONABLEHOUSE
+  result$time=j
+  rm(temp,temp1)
+  resultlist[[j-5]]=result
+  print(j)
+}
+timcov=do.call(rbind,resultlist)
+
+timcov=merge(x=timcov,y=unique(spatiocover2[,c(1,2,5,6)],),by='VILLCODE')
+
+timecover=result[,c('VILLCODE',"REASONABLEHOUSE")]
+timecover=table(reahome3$VILLCODE)%>%as.data.frame()
+names(timecover)=c('VILLCODE',"REASONABLEHOUSE")
+
+bus_stop1=stops5
+bus_stop1=bus_stop1[,c(1,4,5)]
+house=reahome
+house=house%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", X, " ", Y, ")")))%>%
+  st_sf(crs=3826)
+resultlist=list()
+for(j in c(6:23)){
+  bus_stop=bus_stop1[bus_stop1$StopUID%in%stop_time[stop_time$time==j,]$StopUID,]
+  bus_stop=bus_stop%>%
+    mutate(Geometry=st_as_sfc(paste0("POINT(", x, " ", y, ")")))%>%st_sf(crs=3826)
+  #buffer
+  s=Sys.time()
+  bus_stop_buf=st_buffer(bus_stop, 500)%>%
+    st_union()
+  e=Sys.time()
+  print(e-s)
+  temp=st_intersects(house, bus_stop_buf)
+  house_num_ana=house[data.frame(temp)$row.id, ]
+  result=as.data.frame(unique(cbind(as.character(house$VILLCODE),as.character(house$VILLNAME))))
+  names(result)=c("VILLCODE","VILLNAME")
+  for(i in c(1:nrow(result))){
+    village=as.numeric(result[i,1])
+    temp=filter(house,VILLCODE==village)
+    result[i,3]=nrow(temp)
+    temp1=filter(house_num_ana,VILLCODE==village)
+    result[i,4]=nrow(temp1)
+  }
+  names(result)=c("VILLCODE","VILLNAME","REASONABLEHOUSE","SPACECOVERHOUSE")
+  result$SPACECOVERRATE=result$SPACECOVERHOUSE/result$REASONABLEHOUSE
+  result$time=j
+  rm(temp,temp1)
+  names(result)=c("VILLCODE","VILLNAME","REASONABLEHOUSE",paste0('1_',j))
+  timecover=merge(x=timecover,y=result[,c(1,4)],by="VILLCODE",all.x=T)
+  print(j)
+}
+
+timecover=merge(x=timecover,y=spatiocover2[,c(1,4,9,2)],by='VILLCODE',all.x=T)
+
+t1=timecover[timecover$group==1,][,c("1_6","1_7","1_8","1_9","1_10","1_11","1_12","1_13","1_14","1_15","1_16","1_17","1_18","1_19","1_20","1_21","1_22","1_23")]%>%
+  as.matrix()%>%apply(1,mean)/timecover[timecover$group==1,]$REASONABLEHOUSE%>%as.data.frame()
+t1s=timecover[timecover$group==1,][,c("1_6","1_7","1_8","1_9","1_10","1_11","1_12","1_13","1_14","1_15","1_16","1_17","1_18","1_19","1_20","1_21","1_22","1_23")]%>%
+  as.matrix()%>%apply(1,sd)/timecover[timecover$group==1,]$REASONABLEHOUSE%>%as.data.frame()
+t1=cbind(timecover[timecover$group==1,c("VILLCODE","conty","VILLNAME","code","REASONABLEHOUSE","group")],t1,t1s)
+
+t2=timecover[timecover$group==2,][,c("1_7","1_8","1_9","1_10","1_11","1_12","1_13","1_14","1_15","1_16","1_17","1_18","1_19","1_20","1_21")]%>%
+  as.matrix()%>%apply(1,mean)/timecover[timecover$group==2,]$REASONABLEHOUSE%>%as.data.frame()
+t2s=timecover[timecover$group==2,][,c("1_7","1_8","1_9","1_10","1_11","1_12","1_13","1_14","1_15","1_16","1_17","1_18","1_19","1_20","1_21")]%>%
+  as.matrix()%>%apply(1,sd)/timecover[timecover$group==2,]$REASONABLEHOUSE%>%as.data.frame()
+t2=cbind(timecover[timecover$group==2,c("VILLCODE","conty","VILLNAME","code","REASONABLEHOUSE","group")],t2,t2s)
+
+t3=timecover[timecover$group==3,][,c("1_7","1_8","1_11","1_12","1_16","1_17")]%>%
+  as.matrix()%>%apply(1,mean)/timecover[timecover$group==3,]$REASONABLEHOUSE%>%as.data.frame()
+t3s=timecover[timecover$group==3,][,c("1_7","1_8","1_11","1_12","1_16","1_17")]%>%
+  as.matrix()%>%apply(1,sd)/timecover[timecover$group==3,]$REASONABLEHOUSE%>%as.data.frame()
+t3=cbind(timecover[timecover$group==3,c("VILLCODE","conty","VILLNAME","code","REASONABLEHOUSE","group")],t3,t3s)
+
+agghsin=rbind(t1,t2,t3)
+names(agghsin)[c(7,8)]=c('timecover','sd')
+agghsin=agghsin[,c(c("VILLCODE","conty","VILLNAME","code","REASONABLEHOUSE",'timecover','sd',"group"))]
+write_xlsx(agghsin,'timecover/agghsin.xlsx')
+
+townpeople=aggregate(REASONABLEHOUSE~conty,agghsin,sum)
+agghsint=agghsin
+agghsint$timecover=agghsint$timecover*agghsint$REASONABLEHOUSE
+agghsint$sd=agghsint$sd*agghsint$REASONABLEHOUSE
+agghsint=aggregate(cbind(timecover,sd)~conty,data = agghsint,FUN=sum)%>%inner_join(townpeople)
+agghsint$timecover=agghsint$timecover/agghsint$REASONABLEHOUSE
+agghsint$sd=agghsint$sd/agghsint$REASONABLEHOUSE
+write_xlsx(agghsint,'timecover/agghsint.xlsx')
+
+grouppeople=aggregate(REASONABLEHOUSE~group,agghsin,sum)
+agghsing=agghsin
+agghsing$timecover=agghsing$timecover*agghsing$REASONABLEHOUSE
+agghsing$sd=agghsing$sd*agghsing$REASONABLEHOUSE
+agghsing=aggregate(cbind(timecover,sd)~group,data = agghsing,FUN=sum)%>%inner_join(grouppeople)
+agghsing$timecover=agghsing$timecover/agghsing$REASONABLEHOUSE
+agghsing$sd=agghsing$sd/agghsing$REASONABLEHOUSE
+write_xlsx(agghsing,'timecover/agghsing.xlsx')
+
+
+#CRS cooddinate
+mia=thb[,c(9,15,16,20)]
+
+mia=mia%>%
+  mutate(Geometry=st_as_sfc(paste0("POINT(", PositionLon, " ", PositionLat, ")")))%>%
+  st_sf(crs=4326)%>%
+  st_transform(crs=3826)
+rm(temp)
+
+mia=cbind(mia, st_coordinates(mia))%>%
+  rename(X_stop=X, Y_stop=Y)
+mia=st_drop_geometry(mia)
+mia=mia[,c(1,3,2,5,6,4)]
+names(mia)=colnames(stops4)
+stops4=rbind(stops4,mia[!(mia$StopUID%in%stops4$StopUID),])
+
+
+thb=fread('THB_Stop.csv')
+
+
+
+
+
+#INPUT file explain
+#spatiocover2:空間涵蓋率結果
+#agghsin:時間涵蓋結果
+#stcover:合併時空涵蓋率
+#hsintown.map:鄉鎮市區界
+#hsin.map:新竹縣市交界
+#taiwan.map:村里界
+#aroundpoi:步行可及家戶
+#reahome:合理家戶
+#inbounddf:個村里個時段可及家戶數
+#inboundhomes:個村里個時段可及家戶列表
+showtext.auto(enable = TRUE)
+font.add('A', regular = '/Library/Fonts/BiauKai.ttf')
+font.add('B', regular = '/Library/Fonts/Microsoft/Times New Roman.ttf')
+village=read_sf("/Users/zack/Desktop/Elderservice/village/village.shp")
+village=st_transform(village, crs=3826)
+village=filter(village, COUNTYNAME %in% c("新竹市","新竹縣",'桃園市','苗栗縣'))
+town=read_sf("/Users/zack/Desktop/Elderservice/village/town.shp")
+town=st_transform(town, crs=3826)
+town=filter(town, COUNTYNAME %in% c("新竹市","新竹縣",'桃園市','苗栗縣'))
+town=cbind(town, st_coordinates(st_centroid(town)))
+
+county=group_by(town, COUNTYNAME)%>%
+  summarise()
+peakm1=merge(village,spatiocover2[,c('VILLCODE','SPACECOVERRATE')],all.y=T)
+peakm1$type="Non-covered"
+peakm1[peakm1$SPACECOVERRATE>0,]$type="0~20%"
+peakm1[peakm1$SPACECOVERRATE>=0.2,]$type="20~40%"
+peakm1[peakm1$SPACECOVERRATE>=0.4,]$type="40~60%"
+peakm1[peakm1$SPACECOVERRATE>=0.6,]$type="60~80%"
+peakm1[peakm1$SPACECOVERRATE>=0.8,]$type=">80%"
+mp<-ggplot()+
+  geom_sf(data = peakm1,aes(fill = type),size=0.01)+
+  #scale_fill_gradient(low = '#2894FF',high = '#FF8000', n.breaks=6,limits = c(0, 1),name='涵蓋率')+
+  scale_fill_manual(values=c("Non-covered"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                    limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Non-covered"),
+                    drop=F,name='空間涵蓋率',guide=FALSE)+
+  geom_sf(data=town, color="#ADADAD", fill=NA)+
+  geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+  ggtitle("村里空間涵蓋率")+
+  guides(fill = guide_legend(reverse =F))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        title=element_text(family="A", size=26),
+        legend.title=element_text(family="A", size=25, face="bold"),
+        legend.text=element_text(size=22,family="B"))
+png(filename =paste ('/Users/zack/Desktop/Elderservice/spacover/','scover_new1','.png',sep = ''),width=925*2, height=788*2, res=150)
+plot(mp)
+dev.off()
+#=============================================================
+peakm1=merge(village,agghsin[,c('VILLCODE','timecover')],all.y=T)
+peakm1$type="Non-covered"
+peakm1[peakm1$timecover>0,]$type="0~20%"
+peakm1[peakm1$timecover>=0.2,]$type="20~40%"
+peakm1[peakm1$timecover>=0.4,]$type="40~60%"
+peakm1[peakm1$timecover>=0.6,]$type="60~80%"
+peakm1[peakm1$timecover>=0.8,]$type=">80%"
+mp<-ggplot()+
+  geom_sf(data = peakm1,aes(fill = type),size=0.01)+
+  #scale_fill_gradient(low = '#2894FF',high = '#FF8000', n.breaks=6,limits = c(0, 1),name='涵蓋率')+
+  scale_fill_manual(values=c("Non-covered"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                    limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Non-covered"),
+                    drop=F,name='時間涵蓋率',guide=FALSE)+
+  geom_sf(data=town, color="#ADADAD", fill=NA)+
+  geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+  ggtitle("村里時間涵蓋率")+
+  guides(fill = guide_legend(reverse =F))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        title=element_text(family="A", size=26),
+        legend.title=element_text(family="A", size=25, face="bold"),
+        legend.text=element_text(size=22,family="B"))
+png(filename =paste ('/Users/zack/Desktop/Elderservice/spacover/','tcover_new1','.png',sep = ''),width=925*2, height=788*2, res=150)
+plot(mp)
+dev.off()
+
+
+
+
+
+#時空涵蓋分層設色圖
+#a=merge(x=taiwan.map,y=stcover,by='code')#村里界
+peakm1=merge(x=taiwan.map,y=stcover,by='code',all.x=T)
+peakm1$spacover=as.numeric(peakm1$spacover)
+peakm1[is.na(peakm1$spacover),]$spacover=0
+peakm1$type="Non-covered"
+peakm1[peakm1$spacover>0,]$type="0~20%"
+peakm1[peakm1$spacover>=0.2,]$type="20~40%"
+peakm1[peakm1$spacover>=0.4,]$type="40~60%"
+peakm1[peakm1$spacover>=0.6,]$type="60~80%"
+peakm1[peakm1$spacover>=0.8,]$type=">80%"
+peakm1=arrange(peakm1,spacover)
+mp<-ggplot()+
+  geom_sf(data = peakm1,aes(fill = type),size=0.01)+
+  #scale_fill_gradient(low = '#2894FF',high = '#FF8000', n.breaks=6,limits = c(0, 1),name='涵蓋率')+
+  scale_fill_manual(values=c("Non-covered"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                    limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Non-covered"),
+                    drop=F,name='空間涵蓋率',guide=FALSE)+
+  geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+  geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+  ggtitle("村里空間涵蓋率")+
+  guides(fill = guide_legend(reverse = T))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        title=element_text(family="A", size=26),
+        legend.title=element_text(family="A", size=25, face="bold"),
+        legend.text=element_text(size=22,family="B"))
+png(filename =paste ('/Users/zack/Desktop/Elderservice/spacover/','scover_new','.png',sep = ''),width=925*2, height=788*2, res=150)
+plot(mp)
+dev.off()
+peakm1=merge(x=taiwan.map,y=stcover,by='code',all.x=T)
+peakm1$timecover=as.numeric(peakm1$timecover)
+peakm1[is.na(peakm1$timecover),]$timecover=0
+peakm1$type="Non-covered"
+peakm1[peakm1$timecover>0,]$type="0~20%"
+peakm1[peakm1$timecover>=0.2,]$type="20~40%"
+peakm1[peakm1$timecover>=0.4,]$type="40~60%"
+peakm1[peakm1$timecover>=0.6,]$type="60~80%"
+peakm1[peakm1$timecover>=0.8,]$type=">80%"
+peakm1=arrange(peakm1,timecover)
+mp2<-ggplot()+
+  geom_sf(data = peakm1,aes(fill = type),size=0.01)+
+  #scale_fill_gradient(low = '#2894FF',high = '#FF8000', n.breaks=6,limits = c(0, 1),name='涵蓋率')+
+  scale_fill_manual(values=c("Non-covered"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                    limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Non-covered"),
+                    drop=F,name='時間涵蓋率',guide=FALSE)+
+  geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+  geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+  ggtitle("村里時間涵蓋率")+
+  guides(fill = guide_legend(reverse = T))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        title=element_text(family="A", size=26),
+        legend.title=element_text(family="A", size=25, face="bold"),
+        legend.text=element_text(size=22,family="B"))
+png(filename =paste ('/Users/zack/Desktop/Elderservice/spacover/','tcover_new','.png',sep = ''),width=925*2, height=788*2, res=150)
+plot(mp2)
+dev.off()
+
+peakm1=merge(hsintown.map,spatown,by='conty')
+peakm1$spatiocover=as.numeric(peakm1$spatiocover)
+#peakm1[is.na(peakm1$spatiocover),]$spatiocover=0
+peakm1$type="Non-covered"
+peakm1[peakm1$spatiocover>0,]$type="0~20%"
+peakm1[peakm1$spatiocover>=0.2,]$type="20~40%"
+peakm1[peakm1$spatiocover>=0.4,]$type="40~60%"
+peakm1[peakm1$spatiocover>=0.6,]$type="60~80%"
+peakm1[peakm1$spatiocover>=0.8,]$type=">80%"
+peakm1=arrange(peakm1,spatiocover)
+mp<-ggplot()+
+  geom_sf(data = peakm1,aes(fill = type),size=0.01)+
+  #scale_fill_gradient(low = '#2894FF',high = '#FF8000', n.breaks=6,limits = c(0, 1),name='涵蓋率')+
+  scale_fill_manual(values=c("Non-covered"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                    limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Non-covered"),
+                    drop=F,name='空間涵蓋率',guide=FALSE)+
+  geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+  geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+  ggtitle("鄉鎮市區空間涵蓋率")+
+  guides(fill = guide_legend(reverse = T))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        title=element_text(family="A", size=26),
+        legend.title=element_text(family="A", size=25, face="bold"),
+        legend.text=element_text(size=22,family="B"))
+png(filename =paste ('/Users/zack/Desktop/Elderservice/spacover/','scovertown_new','.png',sep = ''),width=925*2, height=788*2, res=150)
+plot(mp)
+dev.off()
+peakm1=merge(hsintown.map,agghsint,by='conty')
+peakm1$meantown=as.numeric(peakm1$meantown)
+#peakm1[is.na(peakm1$meantown),]$meantown=0
+peakm1$type="Non-covered"
+peakm1[peakm1$meantown>0,]$type="0~20%"
+peakm1[peakm1$meantown>=0.2,]$type="20~40%"
+peakm1[peakm1$meantown>=0.4,]$type="40~60%"
+peakm1[peakm1$meantown>=0.6,]$type="60~80%"
+peakm1[peakm1$meantown>=0.8,]$type=">80%"
+peakm1=arrange(peakm1,meantown)
+mp2<-ggplot()+
+  geom_sf(data = peakm1,aes(fill = type),size=0.01)+
+  #scale_fill_gradient(low = '#2894FF',high = '#FF8000', n.breaks=6,limits = c(0, 1),name='涵蓋率')+
+  scale_fill_manual(values=c("Non-covered"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                    limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Non-covered"),
+                    drop=F,name='時間涵蓋率',guide=FALSE)+
+  geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+  geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+  ggtitle("鄉鎮市區時間涵蓋率")+
+  guides(fill = guide_legend(reverse = T))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        title=element_text(family="A", size=26),
+        legend.title=element_text(family="A", size=25, face="bold"),
+        legend.text=element_text(size=22,family="B"))
+png(filename =paste ('/Users/zack/Desktop/Elderservice/spacover/','tcovertown_new','.png',sep = ''),width=925*2, height=788*2, res=150)
+plot(mp2)
+dev.off()
+
+
+
+
+#Lorenz curve
+#family A 為標楷體
+library(DescTools)
+a=arrange(spatiocover2,SPACECOVERHOUSE)
+Lc.p <- Lc(a$SPACECOVERHOUSE,n=a$REASONABLEHOUSE)#Freq:涵蓋家戶數 REASONABLEHOUSE:合理家戶數
+png(filename =paste ('spalonz','.png',sep = ''),width=925*0.8,height=788*0.8, res=150)
+plot(Lc.p,main = '空間涵蓋率羅倫茲曲線',xlab='累計合理家戶數比例',ylab='累計涵蓋家戶數比例',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)),family='A',las=1)
+dev.off()
+
+a=agghsin
+a$Freq=a$timecover*a$REASONABLEHOUSE#timecover:時間涵蓋率 REASONABLEHOUSE:合理家戶數
+a=arrange(a,Freq)
+Lc.p <- Lc(a$Freq,n=a$REASONABLEHOUSE)
+png(filename =paste ('timelonz','.png',sep = ''),width=925*0.8,height=788*0.8, res=150)
+plot(Lc.p,main = '時間涵蓋率羅倫茲曲線',xlab='累計合理家戶數比例',ylab='累計涵蓋家戶數比例',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)),family='A',las=1)
+dev.off()
+
+a=a[c(-3,-19),]
+Lc.p <- Lc(a$Freq,n=a$road)
+plot(Lc.p,main = 'Spatio Lorenz curve' ,xlab='accmulate household',ylab='accmulate coverage',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)))
+plot(Lc.p,main = '空間涵蓋率羅倫茲曲線',xlab='累計合理家戶數比例',ylab='累計涵蓋家戶數比例',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)),family='A',las=1)
+
+png(filename =paste ('spalonz','.png',sep = ''),width=925*0.8,height=788*0.8, res=150)
+plot(Lc.p,main = '空間涵蓋率羅倫茲曲線',xlab='累計合理家戶數比例',ylab='累計涵蓋家戶數比例',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)),family='A',las=1)
+dev.off()
+
+Gini(x=a$Freq, n=a$road , unbiased=FALSE)
+Lcspa=arrange(spatiocover2,Freq)
+Lcspa=cbind(a,as.data.frame(round(Lc.p$p[c(2:315)],digits = 6)),as.data.frame(round(Lc.p$L[c(2:315)],digits = 6)))
+names(Lcspa)[c(7,8)]=c('X-axis','Y=axis')
+write.csv(Lcspa,file = 'Lcspa.csv',row.names = F)
+
+a=agghsin
+a$Freq=a$timecover*a$REASONABLEHOUSE
+a=arrange(a,Freq)
+
+a=a[c(-4,-30),]
+Lc.p <- Lc(a$Freq,n=a$REASONABLEHOUSE)
+plot(Lc.p,main = 'Temporal Lorenz curve' ,xlab='accmulate household',ylab='accmulate coverage',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)))
+plot(Lc.p,main = '時間涵蓋率羅倫茲曲線',xlab='累計合理家戶數比例',ylab='累計涵蓋家戶數比例',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)),family='A',las=1)
+png(filename =paste ('timelonz','.png',sep = ''),width=925*0.8,height=788*0.8, res=150)
+plot(Lc.p,main = '時間涵蓋率羅倫茲曲線',xlab='累計合理家戶數比例',ylab='累計涵蓋家戶數比例',sub=paste('Gini:',round(Lc.p$Gini,digits = 4)),family='A',las=1)
+dev.off()
+Gini(x=a$Freq, n=a$road , unbiased=FALSE)
+Lctime=arrange(agghsin,Freq)
+Lctime=cbind(a,as.data.frame(round(Lc.p$p[c(2:315)],digits = 6)),as.data.frame(round(Lc.p$L[c(2:315)],digits = 6)))
+names(Lctime)[c(7,8)]=c('X-axis','Y=axis')
+write.csv(Lctime,file = 'Lctime.csv',row.names = F)
+
+#可及性前處理
+#accessibility process
+inboundhomes=fread('/Users/zack/Desktop/Elderservice/colab/inboundhomes5.csv')
+inbounddf=read_csv('/Users/zack/Desktop/Elderservice/colab/inbounddf5.csv')
+inboundhomes2=inboundhomes
+
+v=as.data.frame(rep(unique(inbounddf$code),24))
+t=as.data.frame(rep(c(0:23),length(unique(inbounddf$code))))
+names(v)='code'
+v=arrange(v,code)
+names(t)='time'
+v=cbind(v,t)
+
+inbounddf2=merge(v,inbounddf,by=c('code','time'),all.x=T)
+inbounddf2=inbounddf2[,c(3,4,2,1,5:12)]
+inbounddf2=as.matrix(inbounddf2)
+poidf=list()
+for (i in c(1:8)){
+  vills=as.data.frame(unique(reahome3$VILLCODE ))
+  names(vills)='VILLCODE'
+  #vills$code[32]='10004020-鷄林里'
+  #vills$code[47]='10004020-上舘里'
+  #vills$code[164]='10004090-水磜村'
+  a=inbounddf2[,c(3,4,(i+4))]
+  a=as.data.frame(a)
+  atime=unique(a$time)
+  for(j in c(0:23)){
+    b=a[a$time==atime[j+1],][,c(2,3)]
+    names(b)[2]=as.character(j)
+    vills=merge(x=vills,y=b,by='code' , all.x= T)
+  }
+  vills[is.na(vills)]=0
+  vills=arrange(vills,code)
+  poidf[[i]]=vills
+  print(i)
+  poidf[[i]]=merge(x=poidf[[i]],y=spatiocover2[,c('code','road','group')],by='code')
+  poidf[[i]][,c(2:25)]=apply(poidf[[i]][,c(2:25)], 2,as.numeric)
+}
+
+#可及性
+library(ggplot2)
+
+library(ggmap)
+
+library(sp)
+
+library(maptools)
+
+library(maps)
+library(ggmap)
+library(mapproj)
+library(sf)
+library(stringr)
+library(dplyr)
+taiwan.map <- st_read("/Users/zack/Desktop/Elderservice/TaiwanRoad/hsinmap.shp")
+hsin.map=st_read("/Users/zack/Desktop/Elderservice/TaiwanRoad/Hsincityshape.shp")
+hsintown.map=st_read('/Users/zack/Desktop/Elderservice/TaiwanRoad/hsintown.shp')
+
+#可及比例折線圖
+poiclass=colnames(inbounddf2)[5:12]
+a=apply(poidf[[1]][,c(2:25)],2, sum)
+a=a/434555
+accseries=a
+for (i in c(2:8)) {
+  a=apply(poidf[[i]][,c(2:25)],2, sum)
+  a=a/434555
+  accseries=rbind(accseries,a)
+}
+accseries=t(accseries)
+colnames(accseries)=poiclass
+accseries=as.data.frame(accseries)
+accseries$time=as.numeric(row.names(accseries))
+accseries=accseries[,-9]
+
+library(reshape2)
+accseries.melt <- melt(
+  accseries,
+  id.vars = "time",
+  measure.vars = poiclass[c(1:8)]
+)
+
+library(RColorBrewer)
+library(ggnewscale)
+colourCount=length(poiclass)
+getPalette=colorRampPalette(brewer.pal(8, "Set1"))
+
+colourCount=8
+b=ggplot(accseries.melt)+
+  geom_line(aes(x=time, y=value, color=variable, group=variable))+
+  scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+  new_scale_color()+
+  geom_point(aes(x=time, y=value, color=variable, group=variable, shape=variable), size=2)+
+  scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+  scale_shape_manual(values=c(1:colourCount), name="興趣點類型")+
+  scale_x_continuous(breaks=c(0:23))+
+  scale_y_continuous(breaks=seq(0, 1, 0.1))+
+  xlab("時間") + ylab("可及比例")+
+  theme_minimal()+
+  theme(axis.title=element_text(family="A", size=22),
+        axis.text=element_text(family="B", size=17),
+        legend.title=element_text(family="A", size=20, face="bold"),
+        legend.text=element_text(family="A", size=17))
+
+png(filename =paste ('/Users/zack/Desktop/Elderservice/accessibility/','timeseriesplot2','.png',sep = ''),width=1200*2, height=788*2, res=240)
+plot(b)
+dev.off()
+
+#可及性點點畫改
+aroundpoi=aroundpoi[,-1]
+aroundpoi=as.matrix(aroundpoi)
+peakm=c(7,8)+2
+peake=c(17,18,19)+2
+other=c(9,10,11,12,13,14,15,16,20,21,22)+2
+al=c(2:25)
+realist=list()
+mp<-ggplot()+
+  geom_sf(data = taiwan.map,fill='white',size=0.2,alpha=0.3)+
+  #scale_fill_brewer(palette="Set3")+
+  #labs(title = colnames(inboundhomes)[i])+
+  #geom_point(data = reahome1, aes(x = lon, y = lat), color="grey",size=0.0001 )+
+  guides(fill=FALSE)+
+  theme(text=element_text(family="黑體-繁 中黑", size=12))+
+  theme(panel.background=element_blank(),
+        legend.key=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        axis.text=element_blank())
+
+
+library(readr)
+aroundpoi <- read_csv("colab/aroundpoi2.csv")
+aroundpoi=aroundpoi[,-1]
+aroundpoi=as.matrix(aroundpoi)
+peakm=c(7,8)+2
+peake=c(17,18,19)+2
+other=c(9,10,11,12,13,14,15,16,20,21,22)+2
+al=c(2:25)
+spehours=c(8,11,17,20)+2#8 11 17 20
+for(i in c(1:8)){
+  spehours1=spehours+(24*(i-1))
+  al1=al+(24*(i-1))
+  for(j in c(1:4)){
+    rea=reahome[,c('HOUSEID','lon','lat')]
+    rea$type='D'
+    C=unique(as.vector(inboundhomes[,al1]))
+    B=unique(as.vector(inboundhomes[,spehours1[j]]))
+    A=unique(as.vector(aroundpoi[,i]))
+    rea[rea$HOUSEID%in%C,]$type='C'
+    rea[rea$HOUSEID%in%B,]$type='B'
+    rea[rea$HOUSEID%in%A,]$type='A'
+    mp2<-mp+
+      geom_point(data = rea, aes(x = lon, y = lat,color=type),size=0.1 )+
+      scale_color_manual(values=c("B"="#53FF53", "C"="#ADADAD", "A"="#009100", "D"="#E0E0E0"),
+                         labels=c("步行可及","可及","該時間暫無班次","不可及"),
+                         name="",
+                         guide=FALSE,
+                         drop=F)+
+      geom_point(data = poilist4[poilist4$類別==poiclass[i]&str_detect(poilist4$縣市,'新竹'),], aes(x = Lon, y = Lat) ,color='red', size=0.1)+
+      ggtitle(paste((spehours[j]-2),'～',((spehours[j]-2)+1),' H  ',poiclass[i],sep=''))+
+      geom_sf(data = taiwan.map,alpha=0,size=0.06)+
+      theme(panel.background=element_blank(),
+            legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            legend.text=element_text(size=25, family="A"),
+            title=element_text(size=30, family="A",hjust = 0))
+    guides(color=guide_legend(override.aes=list(size=3)))
+    png(filename =paste ('/Users/zack/Desktop/Elderservice/accessibility/可及家戶spehour/',poiclass[i],(spehours[j]-2),'.png',sep = ''),width=925*2, height=788*2, res=150)
+    plot(mp2)
+    dev.off()
+  }
+}
+
+#四種面量圖
+#color in polygon timesec
+library(showtext)
+showtext.auto(enable = TRUE)
+font.add('A', regular = '/Library/Fonts/BiauKai.ttf')
+font.add('B', regular = '/Library/Fonts/Microsoft/Times New Roman.ttf')
+roadbufeer=spatiocover2[,c('code','road')]
+taiwan.map$code=paste(taiwan.map$TOWNCODE,taiwan.map$VILLNAME,sep = '-')
+taiwan.map$code[118]='10004020-<U+9DC4>林里'
+taiwan.map$code[51]='10004020-上<U+8218>里'
+taiwan.map$code[209]='10004090-水<U+78DC>村'
+
+
+realist=list()
+l=list(peakm,peake,other)
+l_char=c('晨峰（7-9）','昏峰（17-20）','離峰（9-17 & 20-23）')
+for(i in c(1:8)){
+  a=merge(x=poidf[[i]],y=roadbufeer,by='code')
+  b=as.matrix(a)[,c(2:25)]
+  class(b) <- "numeric"
+  a[,c(2:25)]=b/as.numeric(a[,c(26)])
+  for(j in c(1:3)){
+    peakm1=as.data.frame(cbind(a[,1],apply(a[,l[[j]]],1,mean),a[,26]))
+    colnames(peakm1)=c('code','mean','num')
+    peakm1=merge(x=taiwan.map,y=peakm1,by='code',all.x=T)
+    peakm1$mean=as.numeric(peakm1$mean)
+    peakm1[is.na(peakm1$mean),]$mean=0
+    peakm1$type="Inaccessible"
+    peakm1[peakm1$mean>0,]$type="0~20%"
+    peakm1[peakm1$mean>=0.2,]$type="20~40%"
+    peakm1[peakm1$mean>=0.4,]$type="40~60%"
+    peakm1[peakm1$mean>=0.6,]$type="60~80%"
+    peakm1[peakm1$mean>=0.8,]$type=">80%"
+    peakm1=arrange(peakm1,mean)
+    mp<-ggplot()+
+      geom_sf(data = peakm1,aes(fill=type),size=0.01)+
+      #scale_fill_gradient(high = 'red',low = 'white',n.breaks=6,labels=c("Inaccessible","0~20%","20~40%","40~60%","60~80%","80~100%"))+
+      scale_fill_manual(values=c("Inaccessible"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                        labels = c(">80%" = ">80%", "60~80%" = "60~80%","40~60%" = "40~60%","20~40%" = "20~40%","0~20%" = "0~20%","Inaccessible"="Inaccessible"),
+                        drop=F,name='村里家戶\n平均可及比例'
+                        ,guide=FALSE
+      )+
+      geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+      geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_point(data = poilist4[poilist4$類別==poiclass[i]&str_detect(poilist4$縣市,'新竹'),], aes(x = Lon, y = Lat) ,color="#66B3FF", shape=18, size=3)+
+      #theme(text=element_text(family="A", size=12))+
+      ggtitle(paste(poiclass[i],'\n',l_char[j],sep = ''))+
+      theme(panel.background=element_blank(),
+            legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            title=element_text(family="A", size=30),
+            legend.title=element_text(family="A", size=32, face="bold"),
+            legend.text=element_text(size=22,family="B"))
+    png(filename =paste ('/Users/zack/Desktop/Elderservice/accessibility/polygoncolor2/',poiclass[i],j,'.png',sep = ''),width=925*2, height=788*2, res=150)
+    plot(mp)
+    dev.off()
+    peakm1=peakm1[,c(2:5,12,13,14)]
+    peakm1$poi=poiclass[i]
+    peakm1$time=l_char[j]
+    st_geometry(peakm1) <- NULL
+    realist[[(i-1)*3+j]]=peakm1
+  }
+  print(i)
+}
+accratio=do.call(rbind,realist)
+
+
+# vill polygon spehour
+spehours=c(8,11,17,20)+2#8 11 17 20
+realist=list()
+for(i in c(1:8)){
+  a=merge(x=poidf[[i]],y=roadbufeer,by='code')
+  b=as.matrix(a)[,c(2:25)]
+  class(b) <- "numeric"
+  a[,c(2:25)]=b/as.numeric(a[,c(26)])
+  for(j in c(1:4)){
+    peakm1=as.data.frame(a[,c(1,spehours[j],26)])
+    colnames(peakm1)=c('code','mean','num')
+    peakm1=merge(x=taiwan.map,y=peakm1,by='code',all.x=T)
+    peakm1$mean=as.numeric(peakm1$mean)
+    peakm1[is.na(peakm1$mean),]$mean=0
+    peakm1$type="Inaccessible"
+    peakm1[peakm1$mean>0,]$type="0~20%"
+    peakm1[peakm1$mean>=0.2,]$type="20~40%"
+    peakm1[peakm1$mean>=0.4,]$type="40~60%"
+    peakm1[peakm1$mean>=0.6,]$type="60~80%"
+    peakm1[peakm1$mean>=0.8,]$type=">80%"
+    peakm1=arrange(peakm1,mean)
+    mp<-ggplot()+
+      geom_sf(data = peakm1,aes(fill=type),size=0.01)+
+      #scale_fill_gradient(high = 'red',low = 'white',n.breaks=6,labels=c("Inaccessible","0~20%","20~40%","40~60%","60~80%","80~100%"))+
+      scale_fill_manual(values=c("Inaccessible"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                        labels = c(">80%" = ">80%", "60~80%" = "60~80%","40~60%" = "40~60%","20~40%" = "20~40%","0~20%" = "0~20%","Inaccessible"="Inaccessible"),
+                        limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Inaccessible"),
+                        drop=F,name='村里家戶可及比例',guide=FALSE)+
+      geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+      geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_point(data = poilist4[poilist4$類別==poiclass[i]&str_detect(poilist4$縣市,'新竹'),], aes(x = Lon, y = Lat) ,color="#66B3FF", shape=18, size=3)+
+      #theme(text=element_text(family="A", size=12))+
+      ggtitle(paste((spehours[j]-2),'-',((spehours[j]-2)+1),' H\n',poiclass[i],sep=''))+
+      theme(panel.background=element_blank(),
+            #legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            legend.title = element_text(size=16,family="A"),
+            title=element_text(family="A", size=30),
+            legend.text=element_text(size=14,family="B"))
+    png(filename =paste ('/Users/zack/Desktop/Elderservice/accessibility/polygoncolor2/',poiclass[i],(spehours[j]-2),'.png',sep = ''),width=925*2, height=788*2, res=150)
+    plot(mp)
+    dev.off()
+    peakm1=peakm1[,c(2:5,12,13,14)]
+    peakm1$poi=poiclass[i]
+    peakm1$time=(spehours[j]-2)
+    st_geometry(peakm1) <- NULL
+    realist[[(i-1)*4+j]]=peakm1
+  }
+}
+accratios=do.call(rbind,realist)
+write.csv(accratios,file = '/Users/zack/Desktop/Elderservice/accessibility/polygoncolor/accratiospehour2.csv')
+
+
+
+#color in polygon town
+hsintown.map$conty=paste(hsintown.map$COUNTYNAME,hsintown.map$TOWNNAME,sep = '')
+townpeople=aggregate(road~conty,data = spatiocover2,FUN=sum)
+realist=list()
+for(i in c(1:8)){
+  for(j in c(1:3)){
+    a=poidf[[i]]
+    a=as.data.frame(cbind(a[,1],apply(a[,l[[j]]],1,mean)))
+    colnames(a)=c('code','mean')
+    a=merge(x=a,y=spatiocover2[,c('code','conty')],by='code',all.x=T)
+    a$mean=as.numeric(a$mean)
+    a=aggregate(mean~conty,data = a,FUN = sum)
+    a=inner_join(a,townpeople)
+    a$mean=a$mean/a$road
+    a=inner_join(hsintown.map,a)
+    #a[is.na(a$mean),]$mean=0
+    tryCatch(
+      expr = {
+        a$type="Inaccessible"
+        a[a$mean>0,]$type="0~20%"
+        a[a$mean>=0.2,]$type="20~40%"
+        a[a$mean>=0.4,]$type="40~60%"
+        a[a$mean>=0.6,]$type="60~80%"
+        a[a$mean>=0.8,]$type=">80%"
+      },
+      error = function(e){ 
+        print('e')
+      })
+    mp<-ggplot()+
+      geom_sf(data = a ,aes(fill=type),size=0.01)+
+      scale_fill_manual(values=c("Inaccessible"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                        limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Inaccessible"),
+                        drop=F,name='鄉鎮市區家戶可及比例',guide=FALSE)+
+      #scale_fill_gradient(high = '#CE0000',low = 'white', n.breaks=6,limits = c(0, 1),labels=c("Inaccessible","0~20%","20~40%","40~60%","60~80%","80~100%"))+
+      #guides(fill=guide_legend(title="鄉鎮市區家戶可及比例",reverse = T))+
+      geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+      geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_point(data = poilist4[poilist4$類別==poiclass[i]&str_detect(poilist4$縣市,'新竹'),], aes(x = Lon, y = Lat) ,color="#66B3FF", shape=18, size=3)+
+      geom_sf_text(data = a, aes(label = TOWNNAME),inherit.aes = FALSE,size=5 )+
+      #theme(text=element_text(family="A", size=12))+
+      ggtitle(paste(poiclass[i],'\n',l_char[j],sep = ''))+
+      theme(panel.background=element_blank(),
+            legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            title=element_text(family="A", size=30),
+            legend.title=element_text(family="A", size=32, face="bold"),
+            legend.text=element_text(size=22,family="B"))
+    png(filename =paste ('/Users/zack/Desktop/Elderservice/accessibility/polygoncolor2/',poiclass[i],j,'t.png',sep = ''),width=925*2, height=788*2, res=150)
+    plot(mp)
+    dev.off()
+    a=a[,c(11:13)]
+    a$poi=poiclass[i]
+    a$time=l_char[j]
+    st_geometry(a) <- NULL
+    names(a)[3]='num'
+    realist[[(i-1)*3+j]]=a
+  }
+}
+accratiot=do.call(rbind,realist)
+write.csv(accratiot,file = '/Users/zack/Desktop/Elderservice/accessibility/polygoncolor2/accratiot.csv',row.names = F)
+
+
+#color in polygon town spehour
+hsintown.map$conty=paste(hsintown.map$COUNTYNAME,hsintown.map$TOWNNAME,sep = '')
+townpeople=aggregate(road~conty,data = spatiocover2,FUN=sum)
+realist=list()
+for(i in c(1:8)){
+  for(j in c(1:4)){
+    a=poidf[[i]]
+    a=as.data.frame(a[,c(1,spehours[j])])
+    colnames(a)=c('code','mean')
+    a=merge(x=a,y=spatiocover2[,c('code','conty')],by='code',all.x=T)
+    a$mean=as.numeric(a$mean)
+    a=aggregate(mean~conty,data = a,FUN = sum)
+    a=inner_join(a,townpeople)
+    a$mean=a$mean/a$road
+    a=inner_join(hsintown.map,a)
+    tryCatch(
+      expr = {
+        a$type="Inaccessible"
+        a[a$mean>0,]$type="0~20%"
+        a[a$mean>=0.2,]$type="20~40%"
+        a[a$mean>=0.4,]$type="40~60%"
+        a[a$mean>=0.6,]$type="60~80%"
+        a[a$mean>=0.8,]$type=">80%"
+      },
+      error = function(e){ 
+        print('e')
+      })
+    mp<-ggplot()+
+      geom_sf(data = a ,aes(fill=type),size=0.01)+
+      scale_fill_manual(values=c("Inaccessible"="white","0~20%"="#FFECEC","20~40%"="#FFB5B5","40~60%"="#FF7575","60~80%"="#FF0000",">80%"="#CE0000"),
+                        limits = c(">80%","60~80%","40~60%", "20~40%","0~20%","Inaccessible"),
+                        drop=F,name='可及比例')+
+      #scale_fill_gradient(high = '#CE0000',low = 'white', n.breaks=6,limits = c(0, 1),labels=c("Inaccessible","0~20%","20~40%","40~60%","60~80%","80~100%"))+
+      #guides(fill=guide_legend(title="鄉鎮市區家戶可及比例",reverse = T))+
+      geom_sf(data=hsintown.map, color="#ADADAD", fill=NA)+
+      geom_sf(data=hsin.map, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_point(data = poilist4[poilist4$類別==poiclass[i]&str_detect(poilist4$縣市,'新竹'),], aes(x = Lon, y = Lat) ,color="#66B3FF", shape=18, size=3)+
+      geom_sf_text(data = a, aes(label = TOWNNAME),inherit.aes = FALSE,size=5 )+
+      #theme(text=element_text(family="A", size=12))+
+      ggtitle(paste((spehours[j]-2),'-',((spehours[j]-2)+1),' H\n',poiclass[i],sep=''))+
+      theme(panel.background=element_blank(),
+            legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            title=element_text(family="A", size=30),
+            legend.title=element_text(family="A", size=32, face="bold"),
+            legend.text=element_text(size=22,family="B"))
+    png(filename =paste ('/Users/zack/Desktop/Elderservice/accessibility/polygoncolor2/',poiclass[i],(spehours[j]-2),'t.png',sep = ''),width=925*2, height=788*2, res=150)
+    plot(mp)
+    dev.off()
+    a=a[,c(11:13)]
+    a$poi=poiclass[i]
+    a$time=(spehours[j]-2)
+    st_geometry(a) <- NULL
+    names(a)[3]='num'
+    realist[[(i-1)*4+j]]=a
+  }
+}
+accratiots=do.call(rbind,realist)
+write.csv(accratiots,file = '/Users/zack/Desktop/Elderservice/accessibility/polygoncolor2/accratiotspehour.csv',row.names = F)
+
+
+
+
+
+
+
+#---繪製家戶可及性地圖---#
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/House_Map_", poitype))
+  
+  house_access=data.frame()
+  for (distr in c(paste0("TAO", c(1:10)))){
+    temp=fread(paste0("./poi_type_result/", poitype, "/house_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("HOUSEID"))%>%
+      rename(TIME=variable, ACCESS=value)
+    house_access=rbind(house_access, temp)
+    rm(temp)
+  }
+  
+  for (t in c(8, 11, 17, 20)){
+    house_plot=merge(house, house_access[house_access$TIME==paste0("HR_", t),])
+    house_plot$ACCESS=factor(house_plot$ACCESS, level=c("N","F","T","W"), ordered=T)
+    
+    map_plot=ggplot()+
+      geom_sf(data=house_plot, size=0.1, aes(color=ACCESS))+
+      scale_color_manual(values=c("N"="#E0E0E0","F"="#ADADAD","T"="#53FF53","W"="#009100"),
+                         # labels=c("空間不可及","空間可及/時間不可及","空間可及/時間可及","步行可及"),
+                         labels=c("不可及","該時間暫無班次","可及","步行可及"),
+                         name="",
+                         drop=F)+
+      geom_sf(data=village, fill=NA, color="#7B7B7B", size=0.2)+
+      geom_sf(data=filter(poi_data, TYPE==poitype), color="red")+
+      ggtitle(paste0(t, "~", t+1, " H  ", poitype))+
+      theme(panel.background=element_blank(),
+            legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            legend.text=element_text(size=25, family="B"),
+            title=element_text(size=30, family="B"))+
+      guides(color=guide_legend(override.aes=list(size=3)))
+    
+    png(paste0("./", poitype, "/House_Map_", poitype, "/House_Map_", poitype, "_", t, ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+  }
+}
+
+
+
+#---擷取尖離峰時間段之可及性分析---#
+sel_time_access=function(x, t){
+  if (t==1){
+    # morning peak (7-9)
+    temp=filter(x, TIME %in% c(7,8))
+  }else if (t==2){
+    # evening peak (7-9)
+    temp=filter(x, TIME %in% c(17:19))
+  }else if (t==3){
+    # off-peak
+    temp=filter(x, TIME %in% c(9:16, 20:22))
+  }else{
+    warning("Warning: t>3 is not allowed")
+    break
+  }
+  return(temp)
+}
+
+time_type=c("晨峰（7-9）","昏峰（17-20）","離峰（9-17 & 20-23）")
+
+village_record=data.frame()
+town_record=data.frame()
+# 繪製鄉鎮市區可及性地圖
+
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./access_selected/", poitype))
+}
+#---繪製村里/鄉鎮區三時段之可及性地圖---#
+for (poitype in unique(poi_data$TYPE)){
+  #  村里可及性
+  Village_access=data.frame()
+  for (distr in c(paste0("TAO", c(1:10)))){
+    temp=read.csv(paste0("./poi_type_result/", poitype, "/Village_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("VILLCODE","num"))%>%
+      rename(TIME=variable, ACCESS=value)
+    
+    if(nrow(Village_access)==0){
+      Village_access=temp
+    }else{
+      Village_access$ACCESS=Village_access$ACCESS+temp$ACCESS
+      rm(temp)
+    }
+  }
+  Village_access$ACCESS_per=Village_access$ACCESS/Village_access$num
+  Village_access$TIME=as.numeric(substr(Village_access$TIME, 9, 10))
+  poi_data_temp=filter(poi_data, TYPE==poitype)
+  
+  
+  for (i in c(1:3)){
+    temp=sel_time_access(Village_access, i)
+    temp=group_by(temp, VILLCODE, num)%>%
+      summarise(ACCESS_per=mean(ACCESS_per))
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","VILLNAME")], temp)
+    temp$ACCESS_per[is.na(temp$ACCESS_per)]=0
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="村里家戶\n平均可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      ggtitle(paste0(unique(poi_data_temp$TYPE), "\n", time_type[i]))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=26),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=25, face="bold"),
+            legend.text=element_text(family="A", size=22))
+    
+    png(paste0("./access_selected/", poitype, "/Village_Map_", poitype, "_",  time_type[i], ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+    
+    village_record=rbind(village_record, data.frame(POI_type=poitype, TIME=time_type[i], st_drop_geometry(temp)[,1:6]))
+    rm(temp)
+    
+    #  鄉鎮區可及性
+    temp=sel_time_access(Village_access, i)
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","TOWNCODE","VILLNAME")], temp)%>%
+      st_drop_geometry()%>%
+      filter(!is.na(VILLNAME))
+    
+    temp=group_by(temp, TOWNCODE, TIME)%>%
+      summarise(num=sum(num), ACCESS=sum(ACCESS))%>%
+      mutate(ACCESS_per=ACCESS/num)%>%
+      group_by(TOWNCODE, num)%>%
+      summarise(ACCESS_per=mean(ACCESS_per))
+    
+    
+    temp=left_join(town[, c("TOWNCODE","COUNTYNAME","TOWNNAME")], temp)
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01, alpha=0.8)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="鄉鎮市區家戶\n平均可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      geom_text(data=st_drop_geometry(town), aes(x=X, y=Y, label=TOWNNAME), size=5, family="B")+
+      ggtitle(paste0(unique(poi_data_temp$TYPE), "\n", time_type[i]))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=26),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=25, face="bold"),
+            legend.text=element_text(family="A", size=22))
+    
+    png(paste0("./access_selected/", poitype, "/District_Map_", poitype, "_", time_type[i], ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+    
+    town_record=rbind(town_record, data.frame(POI_type=poitype, TIME=time_type[i], st_drop_geometry(temp)[,1:5]))
+    rm(temp)
+  }
+}
+
+
+library(GISTools)
+library(sf)
+require(rgdal)
+require(raster)
+library(sp)
+library(ggplot2)
+library(data.table)
+library(lubridate)
+library(dplyr)
+library(jsonlite)
+library(leaflet)
+library(data.table)
+library(readxl)
+library(magrittr)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(utils)
+library(spatialEco)
+library(showtext)
+library(ggnewscale)
+library(gifski)
+setwd("/Users/oscarwang/Documents/NCTU_BUS/access_plot")
+getwd()
+showtext_auto(enable = TRUE)
+font.add('A', regular = '/System/Library/Fonts/Supplemental/Times New Roman.ttf')
+font.add('B', regular = '/Users/oscarwang/Library/Fonts/TW-Kai-98_1.ttf')
+house=read.table("house_num.txt", fileEncoding="UTF-8", header=T)
+house=house[house$COUNTYCODE %in% c(68000),]
+setDT(house)
+setkey(house, HOUSEID)
+
+house=mutate(house, GEOMETRY=st_as_sfc(paste0("POINT(", X, " ", Y, ")")))%>%
+  st_sf(crs=3826)%>%
+  rename(X_house=X, Y_house=Y)
+
+village=read_sf("/Users/oscarwang/Documents/NCTU_BUS/tao_cover_accessbility/桃園市/H_VILLAGE.shp")
+village=st_transform(village, crs=3826)
+village <- left_join(village,town,by="TOWNNAME")
+town=read_sf("/Users/oscarwang/Documents/NCTU_BUS/tao_cover_accessbility/桃園市/H_TOWN.shp")
+town=st_transform(town, crs=3826)
+town=cbind(town, st_coordinates(st_centroid(town)))
+
+county=group_by(town, COUNTYNAME)%>%
+  summarise()
+
+
+town1 <- as.data.frame(town)
+village1 <- as.data.frame(village)
+village1 <- left_join(village1,town1,by="TOWNNAME")
+village1 <- village1[,c(-6,-8,-9,-10,-11)]
+village1 <- village1[,c(1,2,3,6,4,5)]
+colnames(village1)[2] <- "COUNTYNAME"
+colnames(village1)[6] <- "geometry"
+village1 <- st_sf(village1)
+village <- village1
+
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./poi_record/", poitype))
+}
+
+unique(poi_data$TYPE)
+#---興趣點資料---#
+poi_data=read_excel("/Users/oscarwang/Documents/NCTU_BUS/accessbility_v1/POI_data.xlsx")
+poi_data=data.table(poi_data)
+poi_data=mutate(poi_data, geometry=st_as_sfc(paste0("POINT(", Lon, " ", Lat, ")")))%>%
+  st_sf(crs=4326)%>%
+  st_transform(crs=3826)
+colnames(poi_data)[6] <- "TYPE"
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype))
+}
+poi_record=data.frame()
+for (poitype in unique(poi_data$TYPE)){
+  temp2=data.frame()
+  for (i in c(1:10)){
+    temp1=read.csv(paste0("./poi_type_result/", poitype, "/POI_record_TAO", i, "_", poitype, ".csv"))
+    if (nrow(temp2)==0){
+      temp2=temp1
+    }else{
+      temp2$AC_W=temp2$AC_W+temp1$AC_W
+      temp2$AC_T=temp2$AC_T+temp1$AC_T
+      temp2$AC_F=temp2$AC_F+temp1$AC_F
+      temp2$AC_N=temp2$AC_N+temp1$AC_N
+    }
+  }
+  poi_record=rbind(poi_record, data.frame(COUNTY="TAO" ,temp2))
+  rm(temp1, temp2)
+}
+
+poi_record=mutate(poi_record, TOTAL=AC_W+AC_T+AC_F+AC_N)
+
+
+colourCount=length(unique(poi_record$POI))
+getPalette=colorRampPalette(brewer.pal(colourCount, "Set1"))
+
+poi_record$POI=factor(poi_record$POI, levels=c("交通場站","圖書館","政府機關","文化中心","觀光景點","醫院","體育場館","高中職"))
+
+p=ggplot(poi_record)+
+  geom_line(aes(x=TIME, y=(AC_T+AC_W)/TOTAL, color=POI, group=POI))+
+  scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+  new_scale_color()+
+  geom_point(aes(x=TIME, y=(AC_T+AC_W)/TOTAL, color=POI, group=POI, shape=POI), size=2)+
+  scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+  scale_shape_manual(values=c(1:colourCount), name="興趣點類型")+
+  scale_x_continuous(breaks=c(0:23))+
+  scale_y_continuous(breaks=seq(0, 1, 0.1), limits=c(0, 1))+
+  ggtitle(paste0("桃園市各類興趣點依時可及比例折線圖"))+
+  xlab("時間") + ylab("可及比例")+
+  theme_minimal()+
+  theme(axis.title=element_text(family="B", size=22),
+        axis.text=element_text(family="A", size=17),
+        legend.title=element_text(family="B", size=20, face="bold"),
+        legend.text=element_text(family="B", size=17),
+        title=element_text(family="B", size=20, face="bold"))
+
+png(paste0("./poi_record/poi_record_TAO.png"), width=1200*2, height=788*2, res=240)
+print(p)
+dev.off()
+
+
+
+#---繪製村里可及性地圖---#
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/Village_Map_", poitype))
+  
+  Village_access=data.frame()
+  for (distr in c(paste0("TAO", c(1:10)))){
+    temp=read.csv(paste0("./poi_type_result/", poitype, "/Village_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("VILLCODE","num"))%>%
+      rename(TIME=variable, ACCESS=value)
+    
+    if(nrow(Village_access)==0){
+      Village_access=temp
+    }else{
+      Village_access$ACCESS=Village_access$ACCESS+temp$ACCESS
+      rm(temp)
+    }
+  }
+  Village_access$ACCESS_per=Village_access$ACCESS/Village_access$num
+  poi_data_temp=filter(poi_data, TYPE==poitype)
+  
+  
+  for (i in c(0:23)){
+    temp=filter(Village_access, TIME==paste0("village_", i))
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","VILLNAME")], temp)
+    temp$ACCESS_per[is.na(temp$ACCESS_per)]=0
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="村里家戶可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      ggtitle(paste0(i, "~", i+1, " H\n", poi_data_temp$TYPE))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=28),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=20, face="bold"),
+            legend.text=element_text(family="A", size=18))
+    
+    png(paste0("./", poitype, "/Village_Map_", poitype, "/Village_Map_", poitype, "_", i, ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+  }
+}
+
+# 繪製鄉鎮市區可及性地圖
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/District_Map_", poitype))
+}
+
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/District_Map_", poitype))
+  
+  Village_access=data.frame()
+  for (distr in c(paste0("TAO", c(1:10)))){
+    temp=read.csv(paste0("./poi_type_result/", poitype, "/Village_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("VILLCODE","num"))%>%
+      rename(TIME=variable, ACCESS=value)
+    
+    if(nrow(Village_access)==0){
+      Village_access=temp
+    }else{
+      Village_access$ACCESS=Village_access$ACCESS+temp$ACCESS
+      rm(temp)
+    }
+  }
+  Village_access$ACCESS_per=Village_access$ACCESS/Village_access$num
+  
+  poi_data_temp=filter(poi_data, TYPE==poitype)
+  
+  for (i in c(0:23)){
+    temp=filter(Village_access, TIME==paste0("village_", i))
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","TOWNCODE","VILLNAME")], temp)%>%
+      st_drop_geometry()%>%
+      filter(!is.na(VILLNAME))
+    
+    temp=group_by(temp, TOWNCODE)%>%
+      summarise(num=sum(num), ACCESS=sum(ACCESS))%>%
+      mutate(ACCESS_per=ACCESS/num)
+    
+    temp=left_join(town[, c("TOWNCODE","COUNTYNAME","TOWNNAME")], temp)
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01, alpha=0.8)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="鄉鎮市區家戶可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_text(data=st_drop_geometry(town), aes(x=X, y=Y, label=TOWNNAME), size=5, family="B")+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      ggtitle(paste0(i, "~", i+1, " H\n", poi_data_temp$TYPE))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=24),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=20, face="bold"),
+            legend.text=element_text(family="A", size=18))
+    
+    png(paste0("./", poitype, "/District_Map_", poitype, "/District_Map_", poitype, "_", i, ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+  }
+}
+
+
+
+
+#chia code=======================================================
+library(dplyr)
+library(xml2)
+library(httr)
+library(sf)
+library(ggplot2)
+library(tmap)
+library(data.table)
+library(lubridate)
+library(ggnewscale)
+library(RColorBrewer)
+library(reshape2)
+library(plotly)
+library(gifski)
+library(ggsflabel)
+library(ggrepel)
+
+tmap_mode("view")
+windowsFonts(A=windowsFont("Times New Roman"))
+windowsFonts(B=windowsFont("標楷體"))
+
+
+#---房屋資料---#
+house=read.table("D:/Public Transport Big Data Analysis/Analysis/Data/GIS/house number/house_num.txt", fileEncoding="UTF-8", header=T)
+setDT(house)
+setkey(house, HOUSEID)
+
+house=mutate(house, GEOMETRY=st_as_sfc(paste0("POINT(", X, " ", Y, ")")))%>%
+  st_sf(crs=3826)%>%
+  rename(X_house=X, Y_house=Y)
+
+
+#---村里資料---#
+village=read_sf("/Users/zack/Desktop/Elderservice/village/village.shp")
+village=st_transform(village, crs=3826)
+village=filter(village, COUNTYNAME %in% c("新竹市","新竹縣","苗栗縣","桃園市"))
+
+town=read_sf("D:/Public Transport Big Data Analysis/Analysis/Data/GIS/village/town.shp")
+town=st_transform(town, crs=3826)
+town=filter(town, COUNTYNAME %in% c("新竹市","新竹縣","苗栗縣","桃園市"))
+town=cbind(town, st_coordinates(st_centroid(town)))
+
+county=group_by(town, COUNTYNAME)%>%
+  summarise()
+
+
+#---興趣點資料---#
+poi_data=fread("D:/Public Transport Big Data Analysis/Analysis/Data/GIS/facility/POI/POI_Selected.csv")
+poi_data=mutate(poi_data, geometry=st_as_sfc(paste0("POINT(", lon, " ", lat, ")")))%>%
+  st_sf(crs=4326)%>%
+  st_transform(crs=3826)
+
+
+poi_record=data.frame()
+for (poitype in unique(poi_data$TYPE)){
+  for (distr in c("HSQ","HSZ","MIA","TAO")){
+    if (distr=="TAO"){
+      temp2=data.frame()
+      for (i in c(1:10)){
+        temp1=read.csv(paste0("../poi_type_result/", poitype, "/POI_record_TAO", i, "_", poitype, ".csv"))
+        if (nrow(temp2)==0){
+          temp2=temp1
+        }else{
+          temp2$AC_W=temp2$AC_W+temp1$AC_W
+          temp2$AC_T=temp2$AC_T+temp1$AC_T
+          temp2$AC_F=temp2$AC_F+temp1$AC_F
+          temp2$AC_N=temp2$AC_N+temp1$AC_N
+        }
+      }
+      poi_record=rbind(poi_record, data.frame(COUNTY="TAO" ,temp2))
+      rm(temp1, temp2)
+    }else{
+      temp=read.csv(paste0("../poi_type_result/", poitype, "/POI_record_", distr, "_", poitype, ".csv"))
+      poi_record=rbind(poi_record, data.frame(COUNTY=distr ,temp))
+      rm(temp)
+    }
+  }
+}
+
+poi_record=mutate(poi_record, TOTAL=AC_W+AC_T+AC_F+AC_N)
+
+for (distr in c("HSQ","HSZ","MIA","TAO")){
+  colourCount=length(unique(poi_record$POI))
+  getPalette=colorRampPalette(brewer.pal(colourCount, "Set1"))
+  
+  temp=filter(poi_record, COUNTY==distr)
+  countyname=ifelse(distr=="HSQ", "新竹縣", ifelse(distr=="HSZ", "新竹市", ifelse(distr=="MIA", "苗栗縣", ifelse(distr=="TAO", "桃園市"))))
+  temp$POI=factor(temp$POI, levels=c("交通場站","圖書館","政府機關","文化中心","觀光景點","醫院","體育場館","高中職"))
+  
+  p=ggplot(temp)+
+    geom_line(aes(x=TIME, y=(AC_T+AC_W)/TOTAL, color=POI, group=POI))+
+    scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+    new_scale_color()+
+    geom_point(aes(x=TIME, y=(AC_T+AC_W)/TOTAL, color=POI, group=POI, shape=POI), size=2)+
+    scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+    scale_shape_manual(values=c(1:colourCount), name="興趣點類型")+
+    scale_x_continuous(breaks=c(0:23))+
+    scale_y_continuous(breaks=seq(0, 1, 0.1), limits=c(0, 1))+
+    ggtitle(paste0(countyname, "各類興趣點依時可及比例折線圖"))+
+    xlab("時間") + ylab("可及比例")+
+    theme_minimal()+
+    theme(axis.title=element_text(family="B", size=22),
+          axis.text=element_text(family="A", size=17),
+          legend.title=element_text(family="B", size=20, face="bold"),
+          legend.text=element_text(family="B", size=17),
+          title=element_text(family="B", size=20, face="bold"))
+  
+  png(paste0("./poi_record/poi_record_", distr, ".png"), width=1200*2, height=788*2, res=240)
+  print(p)
+  dev.off()
+}
+
+
+# 所有縣市興趣點可及性
+png("./poi_record/poi_record_桃竹苗.png", width=1200*2, height=788*2, res=240)
+temp=group_by(poi_record, POI, TIME)%>%
+  summarise(AC_W=sum(AC_W), AC_T=sum(AC_T), AC_F=sum(AC_F), AC_N=sum(AC_N), TOTAL=sum(TOTAL))
+temp$POI=factor(temp$POI, levels=c("交通場站","圖書館","政府機關","文化中心","觀光景點","醫院","體育場館","高中職"))
+ggplot(temp)+
+  geom_line(aes(x=TIME, y=(AC_T+AC_W)/TOTAL, color=POI, group=POI))+
+  scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+  new_scale_color()+
+  geom_point(aes(x=TIME, y=(AC_T+AC_W)/TOTAL, color=POI, group=POI, shape=POI), size=2)+
+  scale_color_manual(values=getPalette(colourCount), name="興趣點類型")+
+  scale_shape_manual(values=c(1:colourCount), name="興趣點類型")+
+  scale_x_continuous(breaks=c(0:23))+
+  scale_y_continuous(breaks=seq(0, 1, 0.1), limits=c(0, 1))+
+  ggtitle(paste0("桃竹苗各類興趣點依時可及比例折線圖"))+
+  xlab("時間") + ylab("可及比例")+
+  theme_minimal()+
+  theme(axis.title=element_text(family="B", size=22),
+        axis.text=element_text(family="A", size=17),
+        legend.title=element_text(family="B", size=20, face="bold"),
+        legend.text=element_text(family="B", size=17),
+        title=element_text(family="B", size=20, face="bold"))
+dev.off()
+
+
+# for (poitype in unique(poi_data$TYPE)){
+#   dir.create(paste0("./", poitype))
+# }
+
+
+#---繪製家戶可及性地圖---#
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/House_Map_", poitype))
+  
+  house_access=data.frame()
+  for (distr in c("HSQ","HSZ","MIA", paste0("TAO", c(1:10)))){
+    temp=fread(paste0("../poi_type_result/", poitype, "/house_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("HOUSEID"))%>%
+      rename(TIME=variable, ACCESS=value)
+    house_access=rbind(house_access, temp)
+    rm(temp)
+  }
+  
+  for (t in c(8, 11, 17, 20)){
+    house_plot=merge(house, house_access[house_access$TIME==paste0("HR_", t),])
+    house_plot$ACCESS=factor(house_plot$ACCESS, level=c("N","F","T","W"), ordered=T)
+    
+    map_plot=ggplot()+
+      geom_sf(data=house_plot, size=0.1, aes(color=ACCESS))+
+      scale_color_manual(values=c("T"="#53FF53", "F"="#ADADAD", "W"="#009100", "N"="#E0E0E0"),
+                         # labels=c("空間不可及","空間可及/時間不可及","空間可及/時間可及","步行可及"),
+                         labels=c("不可及","該時間暫無班次","可及","步行可及"),
+                         name="",
+                         drop=F)+
+      geom_sf(data=village, fill=NA, color="#7B7B7B", size=0.2)+
+      geom_sf(data=filter(poi_data, TYPE==poitype), color="red")+
+      ggtitle(paste0(t, "~", t+1, " H  ", poitype))+
+      theme(panel.background=element_blank(),
+            legend.key=element_blank(),
+            axis.ticks=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            legend.text=element_text(size=25, family="B"),
+            title=element_text(size=30, family="B"))+
+      guides(color=guide_legend(override.aes=list(size=3)))
+    
+    png(paste0("./", poitype, "/House_Map_", poitype, "/House_Map_", poitype, "_", t, ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+  }
+}
+
+
+
+#---繪製村里可及性地圖---#
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/Village_Map_", poitype))
+  
+  Village_access=data.frame()
+  for (distr in c("HSQ","HSZ","MIA", paste0("TAO", c(1:10)))){
+    temp=read.csv(paste0("../poi_type_result/", poitype, "/Village_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("VILLCODE","num"))%>%
+      rename(TIME=variable, ACCESS=value)
+    
+    if(nrow(Village_access)==0){
+      Village_access=temp
+    }else{
+      Village_access$ACCESS=Village_access$ACCESS+temp$ACCESS
+      rm(temp)
+    }
+  }
+  Village_access$ACCESS_per=Village_access$ACCESS/Village_access$num
+  poi_data_temp=filter(poi_data, TYPE==poitype)
+  
+  
+  for (i in c(0:23)){
+    temp=filter(Village_access, TIME==paste0("village_", i))
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","VILLNAME")], temp)
+    temp$ACCESS_per[is.na(temp$ACCESS_per)]=0
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="村里家戶可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      ggtitle(paste0(i, "~", i+1, " H\n", poi_data_temp$TYPE))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=28),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=20, face="bold"),
+            legend.text=element_text(family="A", size=18))
+    
+    png(paste0("./", poitype, "/Village_Map_", poitype, "/Village_Map_", poitype, "_", i, ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+  }
+}
+
+
+
+# 繪製鄉鎮市區可及性地圖
+for (poitype in unique(poi_data$TYPE)){
+  dir.create(paste0("./", poitype, "/District_Map_", poitype))
+  
+  Village_access=data.frame()
+  for (distr in c("HSQ","HSZ","MIA", paste0("TAO", c(1:10)))){
+    temp=read.csv(paste0("../poi_type_result/", poitype, "/Village_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("VILLCODE","num"))%>%
+      rename(TIME=variable, ACCESS=value)
+    
+    if(nrow(Village_access)==0){
+      Village_access=temp
+    }else{
+      Village_access$ACCESS=Village_access$ACCESS+temp$ACCESS
+      rm(temp)
+    }
+  }
+  Village_access$ACCESS_per=Village_access$ACCESS/Village_access$num
+  
+  poi_data_temp=filter(poi_data, TYPE==poitype)
+  
+  for (i in c(0:23)){
+    temp=filter(Village_access, TIME==paste0("village_", i))
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","TOWNCODE","VILLNAME")], temp)%>%
+      st_drop_geometry()%>%
+      filter(!is.na(VILLNAME))
+    
+    temp=group_by(temp, TOWNCODE)%>%
+      summarise(num=sum(num), ACCESS=sum(ACCESS))%>%
+      mutate(ACCESS_per=ACCESS/num)
+    
+    temp=left_join(town[, c("TOWNCODE","COUNTYNAME","TOWNNAME")], temp)
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01, alpha=0.8)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="鄉鎮市區家戶可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_text(data=st_drop_geometry(town), aes(x=X, y=Y, label=TOWNNAME), size=5, family="B")+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      ggtitle(paste0(i, "~", i+1, " H\n", poi_data_temp$TYPE))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=24),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=20, face="bold"),
+            legend.text=element_text(family="A", size=18))
+    
+    png(paste0("./", poitype, "/District_Map_", poitype, "/District_Map_", poitype, "_", i, ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+  }
+}
+
+
+
+#---繪製村里/家戶/鄉鎮市區可及性GIF---#
+for (poitype in unique(poi_data$TYPE)){
+  # 村里
+  png_files=list.files(path=paste0("./", poitype, "/Village_Map_", poitype), pattern='*.png', full.names=T)
+  png_files=png_files[c(1,2,13,18:24,3:12,14:17)]
+  gifski(png_files, gif_file=paste0("./", poitype, "/Village_Map_", poitype, ".gif"), width=925*2, height=788*2, delay=0.4)
+  
+  # # 家戶
+  # png_files=list.files(path=paste0("./", poitype, "/House_Map_", poitype), pattern='*.png', full.names=T)
+  # png_files=png_files[c(1,2,13,18:24,3:12,14:17)]
+  # gifski(png_files, gif_file=paste0("./access_figure/Accessibility_", dir_result[i], ".gif"), width=925*2, height=788*2, delay=0.4)
+  
+  # 鄉鎮市區
+  png_files=list.files(path=paste0("./", poitype, "/District_Map_", poitype), pattern='*.png', full.names=T)
+  png_files=png_files[c(1,2,13,18:24,3:12,14:17)]
+  gifski(png_files, gif_file=paste0("./", poitype, "/District_Map_", poitype, ".gif"), width=925*2, height=788*2, delay=0.4)
+}
+
+
+
+
+#---擷取尖離峰時間斷之可及性分析---#
+sel_time_access=function(x, t){
+  if (t==1){
+    # morning peak (7-9)
+    temp=filter(x, TIME %in% c(7,8))
+  }else if (t==2){
+    # evening peak (7-9)
+    temp=filter(x, TIME %in% c(17:19))
+  }else if (t==3){
+    # off-peak
+    temp=filter(x, TIME %in% c(9:16, 20:22))
+  }else{
+    warning("Warning: t>3 is not allowed")
+    break
+  }
+  return(temp)
+}
+
+time_type=c("晨峰（7-9）","昏峰（17-20）","離峰（9-17 & 20-23）")
+
+village_record=data.frame()
+town_record=data.frame()
+
+
+#---繪製村里/鄉鎮區三時段之可及性地圖---#
+for (poitype in unique(poi_data$TYPE)){
+  #  村里可及性
+  Village_access=data.frame()
+  for (distr in c("HSQ","HSZ","MIA", paste0("TAO", c(1:10)))){
+    temp=read.csv(paste0("../poi_type_result/", poitype, "/Village_access_", distr, "_", poitype, ".csv"))
+    temp[is.na(temp)]=0
+    temp=reshape2::melt(temp, id=c("VILLCODE","num"))%>%
+      rename(TIME=variable, ACCESS=value)
+    
+    if(nrow(Village_access)==0){
+      Village_access=temp
+    }else{
+      Village_access$ACCESS=Village_access$ACCESS+temp$ACCESS
+      rm(temp)
+    }
+  }
+  Village_access$ACCESS_per=Village_access$ACCESS/Village_access$num
+  Village_access$TIME=as.numeric(substr(Village_access$TIME, 9, 10))
+  poi_data_temp=filter(poi_data, TYPE==poitype)
+  
+  
+  for (i in c(1:3)){
+    temp=sel_time_access(Village_access, i)
+    temp=group_by(temp, VILLCODE, num)%>%
+      summarise(ACCESS_per=mean(ACCESS_per))
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","VILLNAME")], temp)
+    temp$ACCESS_per[is.na(temp$ACCESS_per)]=0
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="村里家戶\n平均可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      ggtitle(paste0(unique(poi_data_temp$TYPE), "\n", time_type[i]))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=26),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=25, face="bold"),
+            legend.text=element_text(family="A", size=22))
+    
+    png(paste0("./access_selected/", poitype, "/Village_Map_", poitype, "_",  time_type[i], ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+    
+    village_record=rbind(village_record, data.frame(POI_type=poitype, TIME=time_type[i], st_drop_geometry(temp)[,1:6]))
+    rm(temp)
+    
+    #  鄉鎮區可及性
+    temp=sel_time_access(Village_access, i)
+    temp$VILLCODE=as.character(temp$VILLCODE)
+    temp=left_join(village[, c("VILLCODE","COUNTYNAME","TOWNNAME","TOWNCODE","VILLNAME")], temp)%>%
+      st_drop_geometry()%>%
+      filter(!is.na(VILLNAME))
+    
+    temp=group_by(temp, TOWNCODE, TIME)%>%
+      summarise(num=sum(num), ACCESS=sum(ACCESS))%>%
+      mutate(ACCESS_per=ACCESS/num)%>%
+      group_by(TOWNCODE, num)%>%
+      summarise(ACCESS_per=mean(ACCESS_per))
+    
+    
+    temp=left_join(town[, c("TOWNCODE","COUNTYNAME","TOWNNAME")], temp)
+    
+    temp=mutate(temp, cla=case_when(
+      ACCESS_per>0.8 ~ ">80%",
+      ACCESS_per>0.6 ~ "60~80%",
+      ACCESS_per>0.4 ~ "40~60%",
+      ACCESS_per>0.2 ~ "20~40%",
+      ACCESS_per>0 ~ "0~20%",
+      TRUE ~ "Inaccessible"
+    ))
+    
+    temp$cla=factor(temp$cla, levels=c(">80%","60~80%","40~60%","20~40%","0~20%","Inaccessible"))
+    
+    map_plot=ggplot(temp)+
+      geom_sf(aes(fill=cla), color="#D0D0D0", size=0.01, alpha=0.8)+
+      scale_fill_manual(values=c(">80%"="#CE0000", "60~80%"="#FF0000", "40~60%"="#FF7575",
+                                 "20~40%"="#FFB5B5", "0~20%"="#FFECEC", "Inaccessible"="white"),
+                        name="鄉鎮市區家戶\n平均可及比例", drop=F)+
+      geom_sf(data=town, color="#ADADAD", fill=NA)+
+      geom_sf(data=county, color="#6C6C6C", fill=NA, size=0.8)+
+      geom_sf(data=poi_data_temp, color="#66B3FF", shape=18, size=3)+
+      geom_text(data=st_drop_geometry(town), aes(x=X, y=Y, label=TOWNNAME), size=5, family="B")+
+      ggtitle(paste0(unique(poi_data_temp$TYPE), "\n", time_type[i]))+
+      theme(panel.background=element_blank(),
+            axis.title=element_blank(),
+            axis.text=element_blank(),
+            axis.ticks=element_blank(),
+            title=element_text(family="B", size=26),
+            legend.key=element_blank(),
+            legend.title=element_text(family="B", size=25, face="bold"),
+            legend.text=element_text(family="A", size=22))
+    
+    png(paste0("./access_selected/", poitype, "/District_Map_", poitype, "_", time_type[i], ".png"), width=925*2, height=788*2, res=150)
+    print(map_plot)
+    dev.off()
+    
+    town_record=rbind(town_record, data.frame(POI_type=poitype, TIME=time_type[i], st_drop_geometry(temp)[,1:5]))
+    rm(temp)
+  }
+}
+
+
+write.csv(village_record, "./access_selected/village_record.csv", row.names=F)
+write.csv(town_record, "./access_selected/town_record.csv", row.names=F)
+
+
+
+
+
+
+# 匯出表格
+Village_access_table=data.frame()
+Village_access_table2=data.frame()
+town_access_table=data.frame()
+town_access_table2=data.frame()
+
+for (poitype in c("all_poi", unique(poi_data$TYPE))){
+  # 村里逐時可及性
+  Village_access=read.csv(paste0("./", poitype, "/Village_access_", poitype, ".csv"))
+  Village_access[is.na(Village_access)]=0
+  
+  Village_access=reshape2::melt(Village_access, id=c("VILLCODE","num"))%>%
+    rename(TIME=variable, ACCESS=value)%>%
+    mutate(ACCESS_per=ACCESS/num,
+           TIME=substr(TIME, 9, 11))
+  
+  Village_access$TIME=as.numeric(Village_access$TIME)
+  Village_access$VILLCODE=as.character(Village_access$VILLCODE)
+  
+  Village_access=left_join(Village_access, st_drop_geometry(village)[, c("VILLCODE","COUNTYNAME","TOWNCODE","TOWNNAME","VILLNAME")])%>%
+    select(COUNTYNAME, TOWNCODE, TOWNNAME, VILLCODE, VILLNAME, num, TIME, ACCESS, ACCESS_per)
+  
+  Village_access_table=rbind(Village_access_table, data.frame(POI_TYPE=poitype, Village_access))
+  
+  # 鄉鎮市區逐時可及性
+  town_access=group_by(Village_access, COUNTYNAME, TOWNCODE, TOWNNAME, TIME)%>%
+    summarise(num=sum(num), ACCESS=sum(ACCESS))%>%
+    mutate(ACCESS_per=ACCESS/num)
+  
+  town_access_table=rbind(town_access_table, data.frame(POI_TYPE=poitype, town_access))
+  
+  # 村里/鄉鎮市區三時段可及性
+  for (i in c(1:3)){
+    # 村里
+    temp=sel_time_access(Village_access, i)
+    temp=group_by(temp, VILLCODE, num)%>%
+      summarise(ACCESS_per=mean(ACCESS_per))
+    temp=left_join(st_drop_geometry(village)[, c("VILLCODE","COUNTYNAME","TOWNCODE","TOWNNAME","VILLNAME")], temp)%>%
+      filter(!(is.na(VILLNAME)))
+    temp$ACCESS_per[is.na(temp$VILLNAME)]=0
+    
+    Village_access_table2=rbind(Village_access_table2, data.frame(POI_TYPE=poitype, TIME=time_type[i], temp))
+    
+    
+    # 鄉鎮市區p$VILLCODE=as.character(temp$VILLCODE)
+    temp=group_by(temp, COUNTYNAME, TOWNCODE, TOWNNAME, TIME)%>%
+      summarise(num=sum(num), ACCESS=sum(ACCESS))%>%
+      mutate(ACCESS_per=ACCESS/num)%>%
+      group_by(COUNTYNAME, TOWNCODE, TOWNNAME, num)%>%
+      summarise(ACCESS_per=mean(ACCESS_per))
+    
+    town_access_table2=rbind(town_access_table2, data.frame(POI_TYPE=poitype, TIME=time_type[i], temp))
+  }
+}
+
+
+
+Village_access_table=arrange(Village_access_table, POI_TYPE, TOWNCODE, VILLCODE, TIME)
+town_access_table=arrange(town_access_table, POI_TYPE, TOWNCODE, TIME)
+Village_access_table2=arrange(Village_access_table2, POI_TYPE, TOWNCODE, VILLCODE, TIME)
+town_access_table2=arrange(town_access_table2, POI_TYPE, TOWNCODE, TIME)
+
+write.csv(Village_access_table, "./table/Village_access_table_time.csv", row.names=F)
+write.csv(town_access_table, "./table/town_access_table_time.csv", row.names=F)
+
+write.csv(Village_access_table, "./table/Village_access_table_time_section.csv", row.names=F)
+write.csv(town_access_table, "./table/town_access_table_time_section.csv", row.names=F)
+
+
+
+
+
+
